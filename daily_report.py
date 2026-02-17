@@ -61,7 +61,7 @@ Consolidate aggressively - similar work should be grouped even if descriptions d
             ["claude", "-p", "--model", "opus", prompt],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=600,
         )
         output = result.stdout.strip()
 
@@ -136,7 +136,7 @@ Write 3-5 plain text bullet points of the substantive work done on this project 
                 ["claude", "-p", "--model", "opus", prompt],
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=600,
             )
             consolidated_summary = result.stdout.strip()
             consolidated.append(
@@ -533,7 +533,7 @@ Do not include preamble or headers. Just bullets or NONE."""
             ["claude", "-p", "--model", "opus", prompt],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=600,
         )
         output = result.stdout.strip()
 
@@ -620,7 +620,11 @@ def main():
         save_report(report, "daily", end)
 
     if args.email:
-        subject = f"Daily Claude Report: {end.strftime('%Y-%m-%d')}"
+        if args.hours <= 24:
+            subject = f"Daily Claude Report: {end.strftime('%Y-%m-%d')}"
+        else:
+            days = args.hours / 24
+            subject = f"Claude Report ({days:.0f} days): {end.strftime('%Y-%m-%d')}"
         email_report(report, subject, args.email)
 
     print(json.dumps(report, indent=2))
