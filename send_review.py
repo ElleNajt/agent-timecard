@@ -24,19 +24,19 @@ hr { border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }
 """
 
 
-def md_to_html(body: str) -> str:
-    """Convert markdown body to styled HTML."""
+def md_to_html(body: str, html_prefix: str = "") -> str:
+    """Convert markdown body to styled HTML, with optional pre-rendered HTML prefix."""
     html_body = markdown.markdown(body, extensions=["fenced_code", "tables"])
-    return f"<html><head>{STYLE}</head><body>{html_body}</body></html>"
+    return f"<html><head>{STYLE}</head><body>{html_prefix}{html_body}</body></html>"
 
 
-def send_gmail(to: str, subject: str, body: str):
+def send_gmail(to: str, subject: str, body: str, html_prefix: str = ""):
     """Send email via Gmail API (macOS Keychain auth)."""
     from keychain_auth import get_gmail_service
 
     service = get_gmail_service()
 
-    message = MIMEText(md_to_html(body), "html")
+    message = MIMEText(md_to_html(body, html_prefix), "html")
     message["to"] = to
     message["subject"] = subject
 
@@ -47,11 +47,13 @@ def send_gmail(to: str, subject: str, body: str):
     return result
 
 
-def send_smtp(to: str, subject: str, body: str, smtp_config: dict):
+def send_smtp(
+    to: str, subject: str, body: str, smtp_config: dict, html_prefix: str = ""
+):
     """Send email via SMTP."""
     import os
 
-    message = MIMEText(md_to_html(body), "html")
+    message = MIMEText(md_to_html(body, html_prefix), "html")
     message["to"] = to
     message["subject"] = subject
     message["from"] = smtp_config["username"]
@@ -70,19 +72,19 @@ def send_smtp(to: str, subject: str, body: str, smtp_config: dict):
     print(f"Email sent via SMTP to {to}")
 
 
-def send_email(to: str, subject: str, body: str):
+def send_email(to: str, subject: str, body: str, html_prefix: str = ""):
     """Send email using configured method."""
     cfg = load_config()
     method = cfg["email_method"]
 
     if method == "gmail":
-        send_gmail(to, subject, body)
+        send_gmail(to, subject, body, html_prefix)
     elif method == "smtp":
         if not cfg.get("smtp"):
             raise RuntimeError(
                 "smtp settings required in config.yaml for email_method: smtp"
             )
-        send_smtp(to, subject, body, cfg["smtp"])
+        send_smtp(to, subject, body, cfg["smtp"], html_prefix)
     else:
         raise RuntimeError(f"Unknown email_method: {method}")
 

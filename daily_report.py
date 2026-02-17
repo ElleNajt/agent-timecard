@@ -499,8 +499,67 @@ def save_report(report: dict, report_type: str, date: datetime):
     return filepath
 
 
+def generate_neglected_callout(report: dict, priorities: str) -> str:
+    """Ask Opus what priorities were neglected, returns HTML callout or empty string."""
+    if not priorities:
+        return ""
+
+    breakdown = report["priority_breakdown"]
+    priority_items = breakdown.get("by_priority_name", [])
+    items_summary = "\n".join(
+        f"- {item['pct']}% — {item['name']}" for item in priority_items
+    )
+    pct = breakdown.get("percentage_of_effort", {})
+    pct_summary = "\n".join(f"- {k}: {v}%" for k, v in pct.items() if v > 0)
+
+    prompt = f"""Given the user's priority list and today's activity report, identify which priorities got NO attention or significantly less attention than they should have.
+
+## Priority List
+{priorities}
+
+## Today's Activity
+{pct_summary}
+
+## Detailed Items
+{items_summary}
+
+Reply with ONLY a short bullet list (2-4 bullets max) of neglected or under-attended priorities. Each bullet should name the specific priority and briefly note why it matters. If nothing important was neglected, reply with exactly: NONE
+
+Do not include preamble or headers. Just bullets or NONE."""
+
+    try:
+        print("Checking for neglected priorities...", file=sys.stderr)
+        result = subprocess.run(
+            ["claude", "-p", "--model", "opus", prompt],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        output = result.stdout.strip()
+
+        if not output or output == "NONE":
+            return ""
+
+        # Wrap in red callout HTML
+        import markdown as md
+
+        bullets_html = md.markdown(output)
+        return (
+            '<div style="background: #fff0f0; border-left: 4px solid #d32f2f; '
+            'padding: 12px 16px; margin-bottom: 20px; border-radius: 4px;">'
+            '<strong style="color: #d32f2f;">Neglected Priorities</strong>'
+            f"{bullets_html}</div>\n"
+        )
+    except Exception as e:
+        print(f"Neglected priorities check failed: {e}", file=sys.stderr)
+        return ""
+
+
 def email_report(report: dict, subject: str, email: str):
     """Email the report."""
+    priorities = load_priorities()
+    neglected_html = generate_neglected_callout(report, priorities)
+
     breakdown = report["priority_breakdown"]
     pct = breakdown["percentage_of_effort"]
 
@@ -536,7 +595,7 @@ def email_report(report: dict, subject: str, email: str):
 
     from send_review import send_email
 
-    send_email(email, subject, body)
+    send_email(email, subject, body, html_prefix=neglected_html)
 
     print(f"Emailed to {email}", file=sys.stderr)
 
