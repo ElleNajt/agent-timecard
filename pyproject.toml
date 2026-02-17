@@ -1,0 +1,11 @@
+[project]
+name = "agent-timecard"
+version = "0.1.0"
+description = "Daily and weekly activity reports from Claude Code sessions"
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client",
+    "google-auth-oauthlib",
+    "pyyaml",
+    "markdown",
+]

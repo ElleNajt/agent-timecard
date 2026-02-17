@@ -1,0 +1,40 @@
+# agent-timecard configuration
+# Copy this to config.yaml and edit for your setup.
+
+# Email address for reports (required for email delivery)
+email: you@example.com
+
+# Path to priorities file (org-mode format, optional)
+# Used to tag work sessions against your priority categories.
+# If omitted, sessions are still summarized but not priority-tagged.
+priorities_file: ~/notes/priorities.org
+
+# Where to save reports (default: ~/notes/claude_reports)
+reports_dir: ~/notes/claude_reports
+
+# Path to Claude Code sessions (default: ~/.claude/projects)
+sessions_dir: ~/.claude/projects
+
+# Email method: "gmail" (uses Google OAuth via macOS Keychain) or "smtp"
+email_method: gmail
+
+# SMTP settings (only if email_method is "smtp")
+# smtp:
+#   host: smtp.gmail.com
+#   port: 587
+#   username: you@gmail.com
+#   password_env: SMTP_PASSWORD  # name of env var containing password
+
+# Filenames to look for in each project as TODO lists.
+# Checked in order; all matches are included.
+todo_filenames:
+  - todos.org
+  - TODO.md
+  - todo.md
+
+# Weekly review: projects to scan for git activity.
+# Each gets a git log summary + any matching todo files.
+# If empty, scans all git repos under ~/code/
+projects:
+  # - ~/code/my-project
+  # - ~/code/another-project
