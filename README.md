@@ -147,14 +147,19 @@ Check logs at `/tmp/dailyreport.log` and `/tmp/weeklyreview.log`.
 
 ### Gmail (macOS Keychain)
 
-This is the default method. It reads OAuth tokens from macOS Keychain under the `google-oauth` service.
+This is the default method. It uses the Gmail API with OAuth tokens stored in macOS Keychain.
 
-To set up authentication, you need a Google OAuth token stored in Keychain with:
-- Service: `google-oauth`
-- Account: `token`
-- Value: JSON OAuth token with `gmail.modify` and `gmail.send` scopes
+**Setup:**
 
-If you already use [google-auth CLI](https://github.com/anthropics/claude-code) or a similar tool that stores tokens in Keychain, this should work automatically.
+1. Create a Google Cloud project and enable the Gmail API
+2. Create OAuth 2.0 credentials (Desktop app type)
+3. Run the OAuth flow to get a token with `gmail.modify` and `gmail.send` scopes
+4. Store the JSON token in Keychain:
+   ```bash
+   security add-generic-password -s google-oauth -a token -w '<json-token>'
+   ```
+
+The `keychain_auth.py` module reads from the `google-oauth` service in Keychain. If you already have a tool that stores Google OAuth tokens there, it should work automatically.
 
 ### SMTP
 
