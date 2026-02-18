@@ -30,6 +30,7 @@ def load_config() -> dict:
             "todo_filenames", ["todos.org", "TODO.md", "todo.md"]
         ),
         "projects": [_expand(p) for p in cfg.get("projects", [])],
+        "timezone": cfg.get("timezone", "US/Pacific"),
     }
 
 

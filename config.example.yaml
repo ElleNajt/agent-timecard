@@ -18,6 +18,9 @@ sessions_dir: ~/.claude/projects
 # Email method: "gmail" (uses Google OAuth via macOS Keychain) or "smtp"
 email_method: gmail
 
+# Timezone for charts and display (default: US/Pacific)
+timezone: US/Pacific
+
 # SMTP settings (only if email_method is "smtp")
 # smtp:
 #   host: smtp.gmail.com

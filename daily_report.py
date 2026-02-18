@@ -642,19 +642,32 @@ def main():
         description="Generate daily Claude activity report"
     )
     parser.add_argument("--hours", type=int, default=24, help="Hours to look back")
+    parser.add_argument(
+        "--date",
+        type=str,
+        help="Generate report for a specific date (YYYY-MM-DD). Covers midnight to midnight in configured timezone.",
+    )
     parser.add_argument("--email", type=str, help="Email address to send report to")
     parser.add_argument("--no-save", action="store_true", help="Don't save to file")
     args = parser.parse_args()
 
     from datetime import timezone
+    from zoneinfo import ZoneInfo
 
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(hours=args.hours)
+    if args.date:
+        tz = ZoneInfo(load_config()["timezone"])
+        day = datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=tz)
+        start = day
+        end = day + timedelta(hours=24)
+    else:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=args.hours)
 
     report = generate_report(start, end)
 
     if not args.no_save:
-        save_report(report, "daily", end)
+        save_date = datetime.strptime(args.date, "%Y-%m-%d") if args.date else end
+        save_report(report, "daily", save_date)
 
     if args.email:
         if args.hours <= 24:

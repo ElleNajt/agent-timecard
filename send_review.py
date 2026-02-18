@@ -4,6 +4,8 @@
 import base64
 import smtplib
 import sys
+from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import markdown
@@ -24,22 +26,60 @@ hr { border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }
 """
 
 
-def md_to_html(body: str, html_prefix: str = "") -> str:
-    """Convert markdown body to styled HTML, with optional pre-rendered HTML prefix."""
+def md_to_html(body: str, html_prefix: str = "", html_suffix: str = "") -> str:
+    """Convert markdown body to styled HTML, with optional pre/post HTML."""
     html_body = markdown.markdown(body, extensions=["fenced_code", "tables"])
-    return f"<html><head>{STYLE}</head><body>{html_prefix}{html_body}</body></html>"
+    return f"<html><head>{STYLE}</head><body>{html_prefix}{html_body}{html_suffix}</body></html>"
 
 
-def send_gmail(to: str, subject: str, body: str, html_prefix: str = ""):
+def _build_message(
+    to: str,
+    subject: str,
+    body: str,
+    html_prefix: str = "",
+    html_suffix: str = "",
+    images: dict[str, bytes] | None = None,
+) -> MIMEMultipart | MIMEText:
+    """Build email message, with optional inline images.
+
+    images: dict of {cid: png_bytes} — referenced in HTML as <img src="cid:name">
+    """
+    html = md_to_html(body, html_prefix, html_suffix)
+
+    if not images:
+        msg = MIMEText(html, "html")
+        msg["to"] = to
+        msg["subject"] = subject
+        return msg
+
+    msg = MIMEMultipart("related")
+    msg["to"] = to
+    msg["subject"] = subject
+    msg.attach(MIMEText(html, "html"))
+
+    for cid, png_bytes in images.items():
+        img = MIMEImage(png_bytes, _subtype="png")
+        img.add_header("Content-ID", f"<{cid}>")
+        img.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
+        msg.attach(img)
+
+    return msg
+
+
+def send_gmail(
+    to: str,
+    subject: str,
+    body: str,
+    html_prefix: str = "",
+    html_suffix: str = "",
+    images: dict[str, bytes] | None = None,
+):
     """Send email via Gmail API (macOS Keychain auth)."""
     from keychain_auth import get_gmail_service
 
     service = get_gmail_service()
 
-    message = MIMEText(md_to_html(body, html_prefix), "html")
-    message["to"] = to
-    message["subject"] = subject
-
+    message = _build_message(to, subject, body, html_prefix, html_suffix, images)
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     result = service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
@@ -72,13 +112,20 @@ def send_smtp(
     print(f"Email sent via SMTP to {to}")
 
 
-def send_email(to: str, subject: str, body: str, html_prefix: str = ""):
+def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    html_prefix: str = "",
+    html_suffix: str = "",
+    images: dict[str, bytes] | None = None,
+):
     """Send email using configured method."""
     cfg = load_config()
     method = cfg["email_method"]
 
     if method == "gmail":
-        send_gmail(to, subject, body, html_prefix)
+        send_gmail(to, subject, body, html_prefix, html_suffix, images)
     elif method == "smtp":
         if not cfg.get("smtp"):
             raise RuntimeError(

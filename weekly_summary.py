@@ -89,7 +89,7 @@ def aggregate_reports(reports: list[dict]) -> dict:
                 "turns", item.get("chars", 0)
             )
 
-    top_priorities = sorted(
+    all_priority_items = sorted(
         [
             {
                 "name": k,
@@ -101,7 +101,14 @@ def aggregate_reports(reports: list[dict]) -> dict:
             for k, v in priority_names.items()
         ],
         key=lambda x: -x["turns"],
-    )[:20]
+    )
+
+    # Re-consolidate priority names across days (daily reports use different names)
+    from daily_report import consolidate_priority_names
+
+    top_priorities = consolidate_priority_names(all_priority_items, grand_total_turns)[
+        :20
+    ]
 
     # Aggregate projects
     project_chars: dict[str, int] = {}
@@ -149,8 +156,10 @@ def save_report(report: dict, date: datetime):
     return filepath
 
 
-def email_report(report: dict, subject: str, email: str):
-    """Email the weekly summary."""
+def email_report(
+    report: dict, subject: str, email: str, daily_reports: list[dict] | None = None
+):
+    """Email the weekly summary with optional charts."""
     breakdown = report["priority_breakdown"]
     pct = breakdown["percentage_of_effort"]
 
@@ -186,9 +195,33 @@ def email_report(report: dict, subject: str, email: str):
 
     body = "\n".join(lines)
 
+    # Generate charts and embed as inline images
+    images = {}
+    charts_html = ""
+    if daily_reports:
+        from charts import generate_all_charts
+
+        print("Generating charts...", file=sys.stderr)
+        charts = generate_all_charts(daily_reports)
+        images = charts
+
+        if charts:
+            parts = ['<hr><h2 style="color:#555;">Charts</h2>']
+            for cid, title in [
+                ("timeseries", "Activity Over Time"),
+                ("daily", "Activity by Day"),
+                ("hourly", "Activity by Hour of Day"),
+            ]:
+                if cid in charts:
+                    parts.append(
+                        f"<h3>{title}</h3>"
+                        f'<img src="cid:{cid}" style="max-width:100%;" />'
+                    )
+            charts_html = "\n".join(parts)
+
     from send_review import send_email
 
-    send_email(email, subject, body)
+    send_email(email, subject, body, html_suffix=charts_html, images=images)
 
     print(f"Emailed to {email}", file=sys.stderr)
 
@@ -217,7 +250,7 @@ def main():
         subject = (
             f"Weekly Summary: {summary['period_start']} to {summary['period_end']}"
         )
-        email_report(summary, subject, args.email)
+        email_report(summary, subject, args.email, daily_reports=reports)
 
     print(json.dumps(summary, indent=2))
 
