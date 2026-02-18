@@ -563,8 +563,16 @@ def email_report(report: dict, subject: str, email: str):
     breakdown = report["priority_breakdown"]
     pct = breakdown["percentage_of_effort"]
 
+    start = datetime.fromisoformat(report["period_start"])
+    end = datetime.fromisoformat(report["period_end"])
+    hours = (end - start).total_seconds() / 3600
+    if hours <= 24:
+        heading = f"Daily Report: {report['period_start'][:10]}"
+    else:
+        heading = f"Report ({hours / 24:.0f} days): {report['period_start'][:10]} to {report['period_end'][:10]}"
+
     lines = [
-        f"# Daily Report: {report['period_start'][:10]}",
+        f"# {heading}",
         "",
         "## Priority Breakdown (by turns)",
     ]
