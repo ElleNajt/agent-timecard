@@ -1,7 +1,8 @@
-"""Shared session extraction and scanning utilities."""
+"""Shared session extraction, scanning, and tagging utilities."""
 
 import json
 import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -154,3 +155,169 @@ def get_sessions(
         sessions.sort(key=lambda x: x["mtime"], reverse=True)
 
     return sessions
+
+
+def load_priorities() -> str:
+    """Load priorities from configured file."""
+    cfg = load_config()
+    pfile = cfg["priorities_file"]
+    if pfile and pfile.exists():
+        return pfile.read_text()
+    return ""
+
+
+def chunk_conversation(
+    messages: list[dict], max_chars: int = 20000
+) -> list[list[dict]]:
+    """Split conversation into chunks that fit in context."""
+    chunks = []
+    current_chunk = []
+    current_size = 0
+
+    for msg in messages:
+        msg_size = len(msg["text"])
+
+        if current_size + msg_size > max_chars and current_chunk:
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_size = 0
+
+        if msg_size > max_chars:
+            msg = {
+                "role": msg["role"],
+                "text": msg["text"][:max_chars] + "...[truncated]",
+            }
+            msg_size = max_chars
+
+        current_chunk.append(msg)
+        current_size += msg_size
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+def format_chunk(chunk: list[dict]) -> str:
+    """Format a chunk as readable text."""
+    lines = []
+    for msg in chunk:
+        prefix = "USER:" if msg["role"] == "user" else "CLAUDE:"
+        lines.append(f"{prefix} {msg['text']}\n")
+    return "\n".join(lines)
+
+
+def summarize_and_tag_chunk(chunk: list[dict], project: str, priorities: str) -> dict:
+    """Use haiku to summarize AND tag a chunk with priority.
+
+    Returns dict with:
+      - priority: P0/P1/P2/OFF-PRIORITY/UNCLEAR
+      - priority_name: short description of which priority
+      - summary: 2-3 bullet summary
+      - user_chars: character count of user messages in chunk
+      - user_turns: number of user messages in chunk
+    """
+    chunk_text = format_chunk(chunk)
+    user_chars = sum(len(m["text"]) for m in chunk if m["role"] == "user")
+    user_turns = sum(1 for m in chunk if m["role"] == "user")
+
+    if priorities:
+        priority_instructions = f"""1. Which priority does this work DIRECTLY relate to? Be conservative - only match if the work clearly fits a priority. Reply with exactly one of:
+   - P0: [which P0 priority, verbatim from list]
+   - P1: [which P1 priority, verbatim from list]
+   - P2: [which P2 priority, verbatim from list]
+   - TOOLING: [brief description] - for dev tools, configs, infrastructure
+   - META: [brief description] - for planning, priorities discussion, project management
+   - OFF-PRIORITY: [brief description] - for work that doesn't fit any category
+   - UNCLEAR: [if can't determine]
+
+Do NOT stretch to fit. If it's tangentially related or infrastructure work, use OFF-PRIORITY or UNCLEAR.
+
+## Priorities Reference (includes project context)
+{priorities}"""
+    else:
+        priority_instructions = """1. Categorize the work. Reply with exactly one of:
+   - TOOLING: [brief description] - for dev tools, configs, infrastructure
+   - META: [brief description] - for planning, project management
+   - FEATURE: [brief description] - for feature work
+   - BUGFIX: [brief description] - for bug fixes
+   - RESEARCH: [brief description] - for exploration, investigation
+   - OTHER: [brief description] - anything else"""
+
+    prompt = f"""Analyze this conversation chunk.
+
+{priority_instructions}
+
+2. Summarize in 2-3 bullets what user was trying to do and what got done.
+
+## Conversation (Project: {project})
+{chunk_text}
+
+Reply in this exact format:
+PRIORITY: [your answer]
+SUMMARY:
+- bullet 1
+- bullet 2"""
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "--model", "haiku", prompt],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        output = result.stdout.strip()
+
+        priority_line = "UNCLEAR"
+        summary_lines = []
+        in_summary = False
+
+        for line in output.split("\n"):
+            if line.startswith("PRIORITY:"):
+                priority_line = line.replace("PRIORITY:", "").strip()
+            elif line.startswith("SUMMARY:"):
+                in_summary = True
+            elif in_summary:
+                summary_lines.append(line)
+
+        priority_level = "UNCLEAR"
+        priority_name = priority_line
+        upper_line = priority_line.upper()
+        for p in [
+            "P0",
+            "P1",
+            "P2",
+            "TOOLING",
+            "META",
+            "FEATURE",
+            "BUGFIX",
+            "RESEARCH",
+            "OFF-PRIORITY",
+            "OFF PRIORITY",
+            "OFFPRIORITY",
+            "OFF",
+            "OTHER",
+        ]:
+            if upper_line.startswith(p):
+                if "OFF" in p:
+                    priority_level = "OFF-PRIORITY"
+                else:
+                    priority_level = p
+                priority_name = priority_line[len(p) :].strip(": -")
+                break
+
+        return {
+            "priority": priority_level,
+            "priority_name": priority_name,
+            "summary": "\n".join(summary_lines).strip(),
+            "user_chars": user_chars,
+            "user_turns": user_turns,
+        }
+    except Exception as e:
+        return {
+            "priority": "UNCLEAR",
+            "priority_name": f"(failed: {e})",
+            "summary": "(summarization failed)",
+            "user_chars": user_chars,
+            "user_turns": user_turns,
+        }

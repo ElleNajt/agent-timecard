@@ -4,9 +4,8 @@ Daily and weekly activity reports from Claude Code sessions. Scans your session 
 
 ## What it does
 
-- **Daily report** (`daily_report.py`): Scans Claude Code sessions, tags each conversation chunk against your priority list, consolidates with Opus, and emails a breakdown. Uses Haiku for cheap tagging and Opus for quality consolidation. Highlights neglected priorities at the top in red.
-- **Weekly summary** (`weekly_summary.py`): Aggregates saved daily report JSON files into weekly trends (no session scanning, just math on existing reports).
-- **Weekly review** (`weekly_review.sh`): Scans sessions (via `generate_review.py`) AND pulls git logs + TODO files from your configured projects, then synthesizes everything with a single Opus call.
+- **Report generator** (`daily_report.py`): Scans Claude Code sessions for a given time window, collects git logs + TODO files from your projects, tags each conversation chunk against your priority list (Haiku), consolidates summaries (Opus), and emails a styled HTML report. Highlights neglected priorities at the top in red.
+- **Summary aggregator** (`weekly_summary.py`): Aggregates saved daily report JSON files into weekly trends. No session scanning — just math on existing reports.
 
 Reports are saved as JSON and optionally emailed as styled HTML.
 
@@ -94,8 +93,7 @@ todo_filenames:
   - TODO.md
   - todo.md
 
-# Projects to scan for git activity in weekly review.
-# Each gets a git log summary + any matching todo files.
+# Projects to include git logs and TODOs from.
 # If empty, scans all git repos under ~/code/
 projects:
   - ~/code/project-a
@@ -115,11 +113,11 @@ uv run python daily_report.py --hours 24
 # Generate and email
 uv run python daily_report.py --hours 24 --email you@example.com
 
-# Weekly summary from saved daily reports
-uv run python weekly_summary.py --days 7
+# Weekly report (last 7 days)
+uv run python daily_report.py --hours 168 --email you@example.com
 
-# Full weekly review (sessions + git logs, synthesized by Opus)
-./weekly_review.sh
+# Aggregate saved daily reports into weekly trends
+uv run python weekly_summary.py --days 7
 ```
 
 ## Scheduling (macOS launchd)
@@ -143,7 +141,7 @@ launchctl load ~/Library/LaunchAgents/com.yourlabel.weeklyreview.plist
 
 Default schedule:
 - Daily report: 8:00 AM every day
-- Weekly review: 9:00 AM every Sunday
+- Weekly summary: 9:00 AM every Sunday
 
 Check logs at `/tmp/dailyreport.log` and `/tmp/weeklyreview.log`.
 
@@ -175,6 +173,7 @@ Reports are saved as JSON to `reports_dir/daily/YYYY-MM-DD.json` with:
 - Priority breakdown (turns, chars, percentages)
 - Per-priority-item breakdown
 - Hourly activity breakdown
-- Per-project summaries
+- Per-project summaries (with git commits and TODOs as context)
+- Git logs from configured projects
 
 Hourly time-series data is also appended to `reports_dir/hourly/timeseries.jsonl` for easy aggregation.

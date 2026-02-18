@@ -11,14 +11,17 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from config import load_config
-from generate_review import (
+from sessions import (
     chunk_conversation,
+    extract_messages,
+    get_sessions,
     load_priorities,
+    setup_oauth_env,
     summarize_and_tag_chunk,
 )
-from sessions import extract_messages, get_sessions, setup_oauth_env
 
 setup_oauth_env()
 
@@ -122,7 +125,11 @@ Consolidate aggressively - similar work should be grouped even if descriptions d
 
 
 def consolidate_with_opus(
-    projects: list[dict], priorities: str, warnings: list[str] | None = None
+    projects: list[dict],
+    priorities: str,
+    warnings: list[str] | None = None,
+    git_logs: dict[str, str] | None = None,
+    todos: dict[str, str] | None = None,
 ) -> list[dict]:
     """Use Opus to create high-quality consolidated summaries for top projects."""
     consolidated = []
@@ -135,7 +142,21 @@ def consolidate_with_opus(
             consolidated.append(proj)
             continue
 
-        prompt = f"""You are consolidating summaries of Claude Code sessions for a daily activity report.
+        # Find matching git log and TODOs by project name
+        proj_name = proj["project"].split("/")[-1]
+        extra_context = ""
+        if git_logs:
+            for name, log in git_logs.items():
+                if name in proj["project"] or proj_name == name:
+                    extra_context += f"\n## Git Commits\n{log}\n"
+                    break
+        if todos:
+            for name, todo_text in todos.items():
+                if name in proj["project"] or proj_name == name:
+                    extra_context += f"\n## Current TODOs\n{todo_text}\n"
+                    break
+
+        prompt = f"""You are consolidating summaries of Claude Code sessions for an activity report.
 
 ## Your Priorities Reference
 {priorities}
@@ -144,9 +165,9 @@ def consolidate_with_opus(
 
 ## Raw Summaries (from multiple sessions/chunks)
 {raw_summaries}
-
+{extra_context}
 ## Instructions
-Write 3-5 plain text bullet points of the substantive work done on this project today.
+Write 3-5 plain text bullet points of the substantive work done on this project.
 
 - Start immediately with bullets (no preamble, no headers, no "Summary:" label)
 - Use plain text only: no markdown headers, no **bold**, no ## headings
@@ -154,6 +175,7 @@ Write 3-5 plain text bullet points of the substantive work done on this project 
 - Skip boilerplate like "Claude initialized" or "session started"
 - Be specific: include concrete details, numbers, file names where relevant
 - If work relates to a priority, note which one in parentheses
+- If git commits are provided, reference relevant ones
 - If the summaries are mostly empty or just initialization, write a single bullet: "No substantive work captured"
 """
 
@@ -186,6 +208,74 @@ Write 3-5 plain text bullet points of the substantive work done on this project 
             f"Project summary consolidation failed for {failed_count} project(s)"
         )
     return consolidated
+
+
+def collect_git_logs(hours: int) -> dict[str, str]:
+    """Collect git logs from configured projects for the given time window."""
+    cfg = load_config()
+    projects = cfg["projects"]
+
+    if not projects:
+        # Fallback: scan ~/code/
+        code_dir = Path.home() / "code"
+        if code_dir.exists():
+            projects = [p for p in code_dir.iterdir() if (p / ".git").exists()]
+
+    logs = {}
+    for project_path in projects:
+        project_path = (
+            Path(project_path) if not isinstance(project_path, Path) else project_path
+        )
+        if not (project_path / ".git").exists():
+            continue
+        name = project_path.name
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(project_path),
+                    "log",
+                    f"--since={hours} hours ago",
+                    "--oneline",
+                    "--all",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.stdout.strip():
+                logs[name] = result.stdout.strip()
+        except Exception:
+            continue
+    return logs
+
+
+def collect_todos() -> dict[str, str]:
+    """Collect TODO files from configured projects."""
+    cfg = load_config()
+    projects = cfg["projects"]
+    todo_filenames = cfg["todo_filenames"]
+
+    if not projects:
+        code_dir = Path.home() / "code"
+        if code_dir.exists():
+            projects = [p for p in code_dir.iterdir() if (p / ".git").exists()]
+
+    todos = {}
+    for project_path in projects:
+        project_path = (
+            Path(project_path) if not isinstance(project_path, Path) else project_path
+        )
+        name = project_path.name
+        project_todos = []
+        for fname in todo_filenames:
+            fpath = project_path / fname
+            if fpath.exists():
+                project_todos.append(f"[{fname}]\n{fpath.read_text()}")
+        if project_todos:
+            todos[name] = "\n\n".join(project_todos)
+    return todos
 
 
 def process_session(args) -> dict | None:
@@ -246,6 +336,11 @@ def generate_report(start: datetime, end: datetime) -> dict:
     warnings: list[str] = []
     priorities = load_priorities()
     sessions = get_sessions()
+
+    hours = int((end - start).total_seconds() / 3600)
+    print("Collecting git logs and TODOs...", file=sys.stderr)
+    git_logs = collect_git_logs(hours)
+    todos = collect_todos()
 
     print(
         f"Scanning {len(sessions)} sessions for messages between {start} and {end}...",
@@ -341,7 +436,7 @@ def generate_report(start: datetime, end: datetime) -> dict:
     )
 
     print("Consolidating project summaries with Opus...", file=sys.stderr)
-    projects = consolidate_with_opus(projects, priorities, warnings)
+    projects = consolidate_with_opus(projects, priorities, warnings, git_logs, todos)
 
     hourly_breakdown = [
         {"hour": h, "priorities": priorities_at_hour}
@@ -365,6 +460,8 @@ def generate_report(start: datetime, end: datetime) -> dict:
         },
         "hourly_breakdown": hourly_breakdown,
         "projects": projects,
+        "git_logs": git_logs,
+        "todos": todos,
         "warnings": warnings,
     }
 
@@ -522,6 +619,14 @@ def email_report(report: dict, subject: str, email: str):
         lines.append(f"\n### {proj['project']} ({proj['chars']:,} chars)")
         for summary in proj["summaries"][:2]:
             lines.append(summary)
+
+    git_logs = report.get("git_logs", {})
+    if git_logs:
+        lines.extend(["", "---", "", "## Git Activity"])
+        for name, log in sorted(git_logs.items()):
+            commit_count = len(log.strip().splitlines())
+            lines.append(f"\n**{name}** ({commit_count} commits)")
+            lines.append(f"```\n{log}\n```")
 
     body = "\n".join(lines)
 
