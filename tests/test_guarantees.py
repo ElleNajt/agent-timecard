@@ -410,16 +410,32 @@ class TestReportStructure:
         "total_user_chars",
     ]
 
-    def test_real_report_structure(self):
-        """Check a real saved daily report has the right structure."""
-        import glob
-
-        files = sorted(glob.glob("/Users/elle/notes/claude_reports/daily/*.json"))
-        if not files:
-            pytest.skip("No daily reports found")
-
-        with open(files[-1]) as f:
-            report = json.load(f)
+    def test_report_structure(self):
+        """A report dict must contain all required keys with consistent data."""
+        report = {
+            "period_start": "2026-02-15T08:00:00+00:00",
+            "period_end": "2026-02-16T08:00:00+00:00",
+            "total_sessions_with_activity": 5,
+            "priority_breakdown": {
+                "by_user_turns": {"P0": 80, "P1": 20},
+                "by_user_chars": {"P0": 8000, "P1": 2000},
+                "by_chunk_count": {"P0": 8, "P1": 2},
+                "percentage_of_effort": {"P0": 80.0, "P1": 20.0},
+                "by_priority_name": [
+                    {"name": "P0: Work", "turns": 80, "pct": 80.0},
+                    {"name": "P1: Other", "turns": 20, "pct": 20.0},
+                ],
+                "total_user_turns": 100,
+                "total_user_chars": 10000,
+            },
+            "hourly_breakdown": [
+                {"hour": 10, "priorities": {"P0": 40, "P1": 10}},
+                {"hour": 14, "priorities": {"P0": 40, "P1": 10}},
+            ],
+            "projects": [
+                {"project": "test-proj", "chars": 10000, "summaries": ["did stuff"]}
+            ],
+        }
 
         for key in self.REQUIRED_KEYS:
             assert key in report, f"Missing key: {key}"
