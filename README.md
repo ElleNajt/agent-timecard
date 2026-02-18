@@ -163,21 +163,7 @@ The `keychain_auth.py` module reads from the `google-oauth` service in Keychain.
 
 ### SMTP
 
-Set `email_method: smtp` in config.yaml and configure:
-
-```yaml
-email_method: smtp
-smtp:
-  host: smtp.gmail.com
-  port: 587
-  username: you@gmail.com
-  password_env: SMTP_PASSWORD  # env var name containing your password
-```
-
-Then set the environment variable before running:
-```bash
-export SMTP_PASSWORD="your-app-password"
-```
+SMTP support exists in the code (`email_method: smtp` in config.yaml) but is untested.
 
 ## Output format
 
