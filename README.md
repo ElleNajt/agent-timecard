@@ -5,9 +5,9 @@ Daily and weekly activity reports from Claude Code sessions. Scans your session 
 ## What it does
 
 - **Report generator** (`daily_report.py`): Scans Claude Code sessions for a given time window, collects git logs + TODO files from your projects, tags each conversation chunk against your priority list (Haiku), consolidates summaries (Opus), and emails a styled HTML report. Highlights neglected priorities at the top in red.
-- **Summary aggregator** (`weekly_summary.py`): Aggregates saved daily report JSON files into weekly trends. No session scanning — just math on existing reports.
+- **Summary aggregator** (`weekly_summary.py`): Aggregates saved daily report JSON files into weekly trends. Re-consolidates priority names across days with Opus so percentages add up. Includes stacked bar charts (by hour-of-day, by day) and a time series. No session scanning — just math on existing reports.
 
-Reports are saved as JSON and optionally emailed as styled HTML.
+Reports are saved as JSON and optionally emailed as styled HTML with inline charts.
 
 ## Example email
 
@@ -87,6 +87,9 @@ sessions_dir: ~/.claude/projects
 # Email method: "gmail" or "smtp"
 email_method: gmail
 
+# Timezone for charts and --date flag (default: US/Pacific)
+timezone: US/Pacific
+
 # Filenames to look for in each project as TODO lists
 todo_filenames:
   - todos.org
@@ -113,11 +116,14 @@ uv run python daily_report.py --hours 24
 # Generate and email
 uv run python daily_report.py --hours 24 --email you@example.com
 
-# Weekly report (last 7 days)
+# Backfill a specific date (midnight-to-midnight in configured timezone)
+uv run python daily_report.py --date 2026-02-15
+
+# Weekly report (last 7 days, scans sessions directly)
 uv run python daily_report.py --hours 168 --email you@example.com
 
-# Aggregate saved daily reports into weekly trends
-uv run python weekly_summary.py --days 7
+# Aggregate saved daily reports into weekly trends (with charts)
+uv run python weekly_summary.py --days 7 --email you@example.com
 ```
 
 ## Scheduling (macOS launchd)
@@ -166,6 +172,17 @@ The `keychain_auth.py` module reads from the `google-oauth` service in Keychain.
 ### SMTP
 
 SMTP support exists in the code (`email_method: smtp` in config.yaml) but is untested.
+
+## Behavioral guarantees
+
+These are tested in `tests/`:
+
+- **Priority turns are preserved through consolidation**: Opus groups items by index, Python sums turns. The total before and after consolidation is identical.
+- **`--date` uses configured timezone**: `--date 2026-02-15` covers midnight-to-midnight in the configured timezone (e.g. PST), not UTC.
+- **Hourly charts use configured timezone**: UTC session hours are converted to local time for display.
+- **Weekly aggregation preserves all turns**: Summing `by_user_turns` across daily JSONs matches the weekly total.
+- **Report structure is complete**: Generated reports contain all required keys (priority_breakdown, hourly_breakdown, projects, etc.).
+- **Charts render from hourly data**: Given valid hourly breakdown data, all three chart types (hourly, daily, time series) produce non-empty PNGs.
 
 ## Output format
 

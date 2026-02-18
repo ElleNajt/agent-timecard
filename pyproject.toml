@@ -10,3 +10,8 @@ dependencies = [
     "markdown",
     "matplotlib",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
