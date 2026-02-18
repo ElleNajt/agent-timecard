@@ -441,6 +441,7 @@ def generate_report(start: datetime, end: datetime) -> dict:
         key=lambda x: -x["turns"],
     )
 
+    raw_priority_name_breakdown = priority_name_breakdown
     priority_name_breakdown = consolidate_priority_names(
         priority_name_breakdown, total_turns
     )
@@ -481,6 +482,7 @@ def generate_report(start: datetime, end: datetime) -> dict:
             "by_chunk_count": priority_chunks,
             "percentage_of_effort": priority_pct,
             "by_priority_name": priority_name_breakdown,
+            "by_priority_name_raw": raw_priority_name_breakdown,
             "total_user_turns": total_turns,
             "total_user_chars": total_chars,
         },
