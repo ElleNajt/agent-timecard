@@ -30,27 +30,30 @@ from generate_review import (
 
 
 def consolidate_priority_names(breakdown: list[dict], total_turns: int) -> list[dict]:
-    """Use Opus to consolidate similar priority names into groups."""
+    """Use Opus to group similar priority names, then sum turns ourselves."""
     if len(breakdown) <= 5:
         return breakdown
 
-    items = "\n".join(
-        [f"- {item['name']} ({item['turns']} turns)" for item in breakdown]
-    )
+    # Number each item so Opus can reference by index
+    numbered = []
+    for i, item in enumerate(breakdown):
+        numbered.append(f"{i}: {item['name']}")
 
-    prompt = f"""You have a list of work items from Claude Code sessions, each tagged with a priority category and description. Many items are duplicates or variations of the same work.
+    items_text = "\n".join(numbered)
 
-Consolidate similar items into groups. For each group, provide:
+    prompt = f"""You have a numbered list of work items from Claude Code sessions. Many are duplicates or variations of the same work.
+
+Group similar items together. For each group, provide:
 1. A short consolidated name (keep the priority prefix like "P0:", "TOOLING:", etc.)
-2. The total turns (sum of all items in the group)
+2. The list of item numbers that belong in this group
 
-Items to consolidate:
-{items}
+Items:
+{items_text}
 
-Reply with JSON only - an array of objects with "name" and "turns" fields, sorted by turns descending. Example:
+Reply with JSON only - an array of objects with "name" and "items" (array of integers) fields. Every item number must appear in exactly one group. Example:
 [
-  {{"name": "P0: Migrate billing service to new API", "turns": 45}},
-  {{"name": "TOOLING: CI pipeline improvements", "turns": 30}}
+  {{"name": "P0: Migrate billing service", "items": [0, 3, 7]}},
+  {{"name": "TOOLING: CI improvements", "items": [1, 2]}}
 ]
 
 Consolidate aggressively - similar work should be grouped even if descriptions differ slightly."""
@@ -81,15 +84,37 @@ Consolidate aggressively - similar work should be grouped even if descriptions d
                     output = output[4:]
                 output = output.strip()
 
-        consolidated = json.loads(output)
+        groups = json.loads(output)
 
-        for item in consolidated:
-            item["pct"] = (
-                round(100 * item["turns"] / total_turns, 1) if total_turns > 0 else 0
+        # Sum turns ourselves from the original data
+        seen_indices = set()
+        consolidated = []
+        for group in groups:
+            indices = group["items"]
+            turns = sum(breakdown[i]["turns"] for i in indices if i < len(breakdown))
+            seen_indices.update(i for i in indices if i < len(breakdown))
+            consolidated.append(
+                {
+                    "name": group["name"],
+                    "turns": turns,
+                    "pct": round(100 * turns / total_turns, 1)
+                    if total_turns > 0
+                    else 0,
+                }
             )
 
+        # Add any items Opus missed
+        for i, item in enumerate(breakdown):
+            if i not in seen_indices:
+                consolidated.append(item)
+
+        consolidated.sort(key=lambda x: -x["turns"])
+
+        consolidated_turns = sum(c["turns"] for c in consolidated)
+        original_turns = sum(b["turns"] for b in breakdown)
         print(
-            f"Consolidated {len(breakdown)} priority items into {len(consolidated)}",
+            f"Consolidated {len(breakdown)} items into {len(consolidated)} "
+            f"({consolidated_turns}/{original_turns} turns preserved)",
             file=sys.stderr,
         )
         return consolidated
