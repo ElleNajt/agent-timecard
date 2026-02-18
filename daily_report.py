@@ -7,29 +7,25 @@ Saves to reports_dir/daily/ and optionally emails.
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from config import load_config
-
-# Ensure Claude OAuth token is set (for claude -p to use long-lived auth)
-OAUTH_TOKEN_FILE = Path.home() / ".ssh" / "claude-oauth-token"
-if OAUTH_TOKEN_FILE.exists() and "CLAUDE_CODE_OAUTH_TOKEN" not in os.environ:
-    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = OAUTH_TOKEN_FILE.read_text().strip()
-
 from generate_review import (
     chunk_conversation,
-    extract_conversation,
     load_priorities,
     summarize_and_tag_chunk,
 )
+from sessions import extract_messages, get_sessions, setup_oauth_env
+
+setup_oauth_env()
 
 
-def consolidate_priority_names(breakdown: list[dict], total_turns: int) -> list[dict]:
+def consolidate_priority_names(
+    breakdown: list[dict], total_turns: int, warnings: list[str] | None = None
+) -> list[dict]:
     """Use Opus to group similar priority names, then sum turns ourselves."""
     if len(breakdown) <= 5:
         return breakdown
@@ -120,12 +116,17 @@ Consolidate aggressively - similar work should be grouped even if descriptions d
         return consolidated
     except Exception as e:
         print(f"Priority consolidation failed: {e}", file=sys.stderr)
+        if warnings is not None:
+            warnings.append("Priority consolidation failed — showing raw items")
         return breakdown
 
 
-def consolidate_with_opus(projects: list[dict], priorities: str) -> list[dict]:
+def consolidate_with_opus(
+    projects: list[dict], priorities: str, warnings: list[str] | None = None
+) -> list[dict]:
     """Use Opus to create high-quality consolidated summaries for top projects."""
     consolidated = []
+    failed_count = 0
 
     for proj in projects[:10]:
         raw_summaries = "\n\n".join(proj["summaries"])
@@ -176,148 +177,23 @@ Write 3-5 plain text bullet points of the substantive work done on this project 
             print(
                 f"Opus consolidation failed for {proj['project']}: {e}", file=sys.stderr
             )
+            failed_count += 1
             consolidated.append(proj)
 
     consolidated.extend(projects[10:])
-    return consolidated
-
-
-def extract_conversation_with_timestamps(session_path: str) -> list[dict]:
-    """Extract messages with their timestamps."""
-    messages = []
-
-    try:
-        f = open(session_path)
-    except FileNotFoundError:
-        return []
-
-    with f:
-        for line in f:
-            try:
-                obj = json.loads(line)
-                timestamp = obj.get("timestamp")
-                if not timestamp:
-                    continue
-
-                ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-
-                if obj.get("type") == "user":
-                    msg = obj.get("message", {})
-                    if isinstance(msg, dict):
-                        content = msg.get("content", "")
-                        text = ""
-                        if isinstance(content, list):
-                            for c in content:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    text += c.get("text", "") + "\n"
-                        elif isinstance(content, str):
-                            text = content
-
-                        if (
-                            text
-                            and not text.startswith("<shell-maker")
-                            and len(text.strip()) > 10
-                        ):
-                            messages.append(
-                                {
-                                    "role": "user",
-                                    "text": text.strip(),
-                                    "timestamp": ts,
-                                }
-                            )
-
-                elif obj.get("type") == "assistant":
-                    msg = obj.get("message", {})
-                    if isinstance(msg, dict):
-                        content = msg.get("content", "")
-                        text = ""
-                        if isinstance(content, list):
-                            for c in content:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    text += c.get("text", "") + "\n"
-                        elif isinstance(content, str):
-                            text = content
-
-                        if text.strip():
-                            messages.append(
-                                {
-                                    "role": "assistant",
-                                    "text": text.strip(),
-                                    "timestamp": ts,
-                                }
-                            )
-
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-    return messages
-
-
-def filter_messages_by_time(
-    messages: list[dict], start: datetime, end: datetime
-) -> list[dict]:
-    """Filter messages to only those within the time window."""
-    return [m for m in messages if start <= m["timestamp"] <= end]
-
-
-def count_user_turns(session_path: str) -> int:
-    """Count user turns in a session file (quick scan without full parsing)."""
-    count = 0
-    with open(session_path) as f:
-        for line in f:
-            if '"type":"user"' in line or '"type": "user"' in line:
-                count += 1
-    return count
-
-
-def get_all_sessions(min_turns: int = 3, min_size: int = 5000) -> list[dict]:
-    """Get all session files with at least min_turns user turns and min_size bytes."""
-    cfg = load_config()
-    projects_dir = cfg["sessions_dir"]
-    sessions = []
-
-    for jsonl_file in projects_dir.rglob("*.jsonl"):
-        if "subagents" in str(jsonl_file):
-            continue
-
-        stat = jsonl_file.stat()
-
-        if stat.st_size < min_size:
-            continue
-
-        turns = count_user_turns(str(jsonl_file))
-        if turns < min_turns:
-            continue
-
-        # Claude Code encodes paths like -Users-username-code-project
-        # Strip the home directory prefix to get a readable name
-        rel_path = str(jsonl_file.relative_to(projects_dir))
-        project = rel_path.split("/")[0]
-        home_prefix = str(Path.home()).replace("/", "-")
-        if project.startswith(home_prefix):
-            project = project[len(home_prefix) :]
-        project = project.strip("-").replace("-", "/")
-
-        sessions.append(
-            {
-                "path": str(jsonl_file),
-                "project": project,
-                "size_kb": stat.st_size // 1024,
-            }
+    if failed_count and warnings is not None:
+        warnings.append(
+            f"Project summary consolidation failed for {failed_count} project(s)"
         )
-
-    return sessions
+    return consolidated
 
 
 def process_session(args) -> dict | None:
     """Process a single session, filtering by time window."""
     session, project, priorities, start, end = args
 
-    try:
-        messages = extract_conversation_with_timestamps(session["path"])
-    except FileNotFoundError:
-        return None
-    filtered = filter_messages_by_time(messages, start, end)
+    messages = extract_messages(session["path"], with_timestamps=True)
+    filtered = [m for m in messages if start <= m["timestamp"] <= end]
 
     if not filtered:
         return None
@@ -367,8 +243,9 @@ def process_session(args) -> dict | None:
 
 def generate_report(start: datetime, end: datetime) -> dict:
     """Generate report for the given time window."""
+    warnings: list[str] = []
     priorities = load_priorities()
-    sessions = get_all_sessions()
+    sessions = get_sessions()
 
     print(
         f"Scanning {len(sessions)} sessions for messages between {start} and {end}...",
@@ -443,7 +320,7 @@ def generate_report(start: datetime, end: datetime) -> dict:
 
     raw_priority_name_breakdown = priority_name_breakdown
     priority_name_breakdown = consolidate_priority_names(
-        priority_name_breakdown, total_turns
+        priority_name_breakdown, total_turns, warnings
     )
 
     # Group by project
@@ -464,7 +341,7 @@ def generate_report(start: datetime, end: datetime) -> dict:
     )
 
     print("Consolidating project summaries with Opus...", file=sys.stderr)
-    projects = consolidate_with_opus(projects, priorities)
+    projects = consolidate_with_opus(projects, priorities, warnings)
 
     hourly_breakdown = [
         {"hour": h, "priorities": priorities_at_hour}
@@ -488,6 +365,7 @@ def generate_report(start: datetime, end: datetime) -> dict:
         },
         "hourly_breakdown": hourly_breakdown,
         "projects": projects,
+        "warnings": warnings,
     }
 
 
@@ -526,7 +404,9 @@ def save_report(report: dict, report_type: str, date: datetime):
     return filepath
 
 
-def generate_neglected_callout(report: dict, priorities: str) -> str:
+def generate_neglected_callout(
+    report: dict, priorities: str, warnings: list[str] | None = None
+) -> str:
     """Ask Opus what priorities were neglected, returns HTML callout or empty string."""
     if not priorities:
         return ""
@@ -579,13 +459,30 @@ Do not include preamble or headers. Just bullets or NONE."""
         )
     except Exception as e:
         print(f"Neglected priorities check failed: {e}", file=sys.stderr)
+        if warnings is not None:
+            warnings.append("Neglected priorities check failed")
         return ""
 
 
 def email_report(report: dict, subject: str, email: str):
     """Email the report."""
+    warnings = list(report.get("warnings", []))
     priorities = load_priorities()
-    neglected_html = generate_neglected_callout(report, priorities)
+    neglected_html = generate_neglected_callout(report, priorities, warnings)
+
+    # Build degradation banner if any warnings
+    if warnings:
+        warning_items = "".join(f"<li>{w}</li>" for w in warnings)
+        degradation_html = (
+            '<div style="background: #fff8e1; border-left: 4px solid #f9a825; '
+            'padding: 12px 16px; margin-bottom: 20px; border-radius: 4px;">'
+            '<strong style="color: #f57f17;">Degraded Report</strong>'
+            f'<ul style="margin: 8px 0 0 0;">{warning_items}</ul></div>\n'
+        )
+    else:
+        degradation_html = ""
+
+    html_prefix = degradation_html + neglected_html
 
     breakdown = report["priority_breakdown"]
     pct = breakdown["percentage_of_effort"]
@@ -630,7 +527,7 @@ def email_report(report: dict, subject: str, email: str):
 
     from send_review import send_email
 
-    send_email(email, subject, body, html_prefix=neglected_html)
+    send_email(email, subject, body, html_prefix=html_prefix)
 
     print(f"Emailed to {email}", file=sys.stderr)
 

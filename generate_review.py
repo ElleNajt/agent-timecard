@@ -11,19 +11,15 @@ Strategy:
 """
 
 import json
-import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from config import load_config
+from sessions import extract_messages, get_sessions, setup_oauth_env
 
-# Ensure Claude OAuth token is set (for claude -p to use long-lived auth)
-OAUTH_TOKEN_FILE = Path.home() / ".ssh" / "claude-oauth-token"
-if OAUTH_TOKEN_FILE.exists() and "CLAUDE_CODE_OAUTH_TOKEN" not in os.environ:
-    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = OAUTH_TOKEN_FILE.read_text().strip()
+setup_oauth_env()
 
 
 def load_priorities() -> str:
@@ -33,56 +29,6 @@ def load_priorities() -> str:
     if pfile and pfile.exists():
         return pfile.read_text()
     return ""
-
-
-def extract_conversation(session_path: str) -> list[dict]:
-    """Extract user prompts and assistant text responses only (no tool calls)."""
-    messages = []
-
-    with open(session_path) as f:
-        for line in f:
-            try:
-                obj = json.loads(line)
-
-                if obj.get("type") == "user":
-                    msg = obj.get("message", {})
-                    if isinstance(msg, dict):
-                        content = msg.get("content", "")
-                        text = ""
-                        if isinstance(content, list):
-                            for c in content:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    text += c.get("text", "") + "\n"
-                        elif isinstance(content, str):
-                            text = content
-
-                        # Skip shell-maker noise and very short messages
-                        if (
-                            text
-                            and not text.startswith("<shell-maker")
-                            and len(text.strip()) > 10
-                        ):
-                            messages.append({"role": "user", "text": text.strip()})
-
-                elif obj.get("type") == "assistant":
-                    msg = obj.get("message", {})
-                    if isinstance(msg, dict):
-                        content = msg.get("content", "")
-                        text = ""
-                        if isinstance(content, list):
-                            for c in content:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    text += c.get("text", "") + "\n"
-                        elif isinstance(content, str):
-                            text = content
-
-                        if text.strip():
-                            messages.append({"role": "assistant", "text": text.strip()})
-
-            except json.JSONDecodeError:
-                continue
-
-    return messages
 
 
 def chunk_conversation(
@@ -247,7 +193,7 @@ SUMMARY:
 
 def summarize_session(session_path: str, project: str, priorities: str) -> dict:
     """Summarize a full session, chunking if needed."""
-    messages = extract_conversation(session_path)
+    messages = extract_messages(session_path)
 
     if not messages:
         return {
@@ -296,65 +242,6 @@ Combined summary:"""
     }
 
 
-def count_user_turns(session_path: str) -> int:
-    """Count user turns in a session file (quick scan without full parsing)."""
-    count = 0
-    with open(session_path) as f:
-        for line in f:
-            if '"type":"user"' in line or '"type": "user"' in line:
-                count += 1
-    return count
-
-
-def get_recent_sessions(
-    days: int = 7, min_turns: int = 3, min_size: int = 5000
-) -> list[dict]:
-    """Find session files from the last N days with enough activity."""
-    cfg = load_config()
-    projects_dir = cfg["sessions_dir"]
-    cutoff = datetime.now() - timedelta(days=days)
-
-    sessions = []
-    for jsonl_file in projects_dir.rglob("*.jsonl"):
-        if "subagents" in str(jsonl_file):
-            continue
-
-        stat = jsonl_file.stat()
-        mtime = datetime.fromtimestamp(stat.st_mtime)
-
-        if mtime < cutoff:
-            continue
-
-        if stat.st_size < min_size:
-            continue
-
-        turns = count_user_turns(str(jsonl_file))
-        if turns < min_turns:
-            continue
-
-        # Extract project name from path
-        # Claude Code encodes paths like -Users-username-code-project
-        # Strip the home directory prefix to get a readable name
-        rel_path = str(jsonl_file.relative_to(projects_dir))
-        project = rel_path.split("/")[0]
-        home_prefix = str(Path.home()).replace("/", "-")
-        if project.startswith(home_prefix):
-            project = project[len(home_prefix) :]
-        project = project.strip("-").replace("-", "/")
-
-        sessions.append(
-            {
-                "path": str(jsonl_file),
-                "project": project,
-                "mtime": mtime,
-                "size_kb": stat.st_size // 1024,
-            }
-        )
-
-    sessions.sort(key=lambda x: x["mtime"], reverse=True)
-    return sessions
-
-
 def summarize_session_wrapper(args):
     """Wrapper for parallel execution."""
     session, project, priorities = args
@@ -382,7 +269,8 @@ def main():
     )
     args = parser.parse_args()
 
-    sessions = get_recent_sessions(days=args.days, min_turns=args.min_turns)
+    cutoff = datetime.now() - timedelta(days=args.days)
+    sessions = get_sessions(since=cutoff, min_turns=args.min_turns)
 
     if not sessions:
         print(json.dumps({"error": "No sessions found."}))
