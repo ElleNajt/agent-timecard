@@ -4,9 +4,9 @@ Daily and weekly activity reports from Claude Code sessions. Scans your session 
 
 ## What it does
 
-- **Daily report** (`daily_report.py`): Scans the last 24 hours of Claude Code sessions, tags each conversation chunk against your priority list, and produces a breakdown of time spent. Uses Haiku for cheap tagging and Opus for quality consolidation.
-- **Weekly summary** (`weekly_summary.py`): Aggregates daily reports into weekly trends.
-- **Weekly review** (`weekly_review.sh`): Deeper weekly review that also pulls git logs from your projects and synthesizes everything with Opus.
+- **Daily report** (`daily_report.py`): Scans Claude Code sessions, tags each conversation chunk against your priority list, consolidates with Opus, and emails a breakdown. Uses Haiku for cheap tagging and Opus for quality consolidation. Highlights neglected priorities at the top in red.
+- **Weekly summary** (`weekly_summary.py`): Aggregates saved daily report JSON files into weekly trends (no session scanning, just math on existing reports).
+- **Weekly review** (`weekly_review.sh`): Scans sessions (via `generate_review.py`) AND pulls git logs + TODO files from your configured projects, then synthesizes everything with a single Opus call.
 
 Reports are saved as JSON and optionally emailed as styled HTML.
 
@@ -14,6 +14,10 @@ Reports are saved as JSON and optionally emailed as styled HTML.
 
 Here's what a daily report looks like in your inbox:
 
+> **Neglected Priorities** *(appears in red in email)*
+> - P1: Spice harvester fleet logistics dashboard — no sessions this week, fleet routing still uses manual overrides
+> - P2: Bene Gesserit diplomatic protocol integration — zero progress, Reverend Mother liaison increasingly impatient
+>
 > ### Daily Report: 10191-03-22
 >
 > **Priority Breakdown (by turns)**
